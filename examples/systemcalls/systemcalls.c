@@ -1,5 +1,11 @@
 #include "systemcalls.h"
 
+#include <fcntl.h>
+#include <stdlib.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <unistd.h>
+
 /**
  * @param cmd the command to execute with system()
  * @return true if the command in @param cmd was executed
@@ -16,8 +22,23 @@ bool do_system(const char *cmd)
  *   and return a boolean true if the system() call completed with success
  *   or false() if it returned a failure
 */
+    bool status = false;
 
-    return true;
+    int rc = system(cmd);
+    if (rc == 0)
+    {
+        status = true;
+    }
+    else if (rc == -1)
+    {
+        perror("Command failed with error");
+    }
+    else
+    {
+        printf("Command failed with error code: %d", rc);
+    }
+
+    return status;
 }
 
 /**
@@ -47,7 +68,9 @@ bool do_exec(int count, ...)
     command[count] = NULL;
     // this line is to avoid a compile warning before your implementation is complete
     // and may be removed
-    command[count] = command[count];
+    //command[count] = command[count];
+
+    va_end(args);
 
 /*
  * TODO:
@@ -59,9 +82,49 @@ bool do_exec(int count, ...)
  *
 */
 
-    va_end(args);
+    bool status = true;
+    pid_t pid = fork();
 
-    return true;
+    if (pid == -1)
+    {
+        perror("fork");
+    }
+    else if (pid == 0)
+    {
+        // Child logic
+        if (execv(command[0], command) == -1)
+        {
+            perror("execv");
+            exit(EXIT_FAILURE);
+        }
+    }
+    else
+    {
+        // Parent logic
+        int wstatus;
+
+        if (waitpid(pid, &wstatus, 0) == -1)
+        {
+            perror("wait");
+            status = false;
+        }
+        else
+        {
+            if (WIFEXITED(wstatus))
+            {
+                if (WEXITSTATUS(wstatus) == 1)
+                {
+                    status = false;
+                }
+            }
+            else
+            {
+                status = false;
+            }
+        }
+    }
+
+    return status;
 }
 
 /**
@@ -82,8 +145,8 @@ bool do_exec_redirect(const char *outputfile, int count, ...)
     command[count] = NULL;
     // this line is to avoid a compile warning before your implementation is complete
     // and may be removed
-    command[count] = command[count];
-
+    //command[count] = command[count];
+    va_end(args);
 
 /*
  * TODO
@@ -92,8 +155,90 @@ bool do_exec_redirect(const char *outputfile, int count, ...)
  *   The rest of the behaviour is same as do_exec()
  *
 */
+    int pipefd[2];
 
-    va_end(args);
+    if (pipe(pipefd) == -1)
+    {
+        perror("pipe");
+        exit(EXIT_FAILURE);
+    }
 
-    return true;
+    int fd = open(outputfile, O_WRONLY|O_TRUNC|O_CREAT, 0644);
+
+    bool status = true;
+    pid_t pid = fork();
+
+    if (pid == -1)
+    {
+        perror("fork");
+        exit(EXIT_FAILURE);
+    }
+    else if (pid == 0)
+    {
+        // Child logic
+
+        // Close the read pipe
+        close(pipefd[0]);
+
+        // Point stdout to write to the pipe
+        if (dup2(pipefd[1], STDOUT_FILENO) == -1)
+        {
+            perror("dup2");
+            exit(EXIT_FAILURE);
+        }
+
+        // Execute the command
+        if (execv(command[0], command) == -1)
+        {
+            perror("execv");
+            exit(EXIT_FAILURE);
+        }
+    }
+    else
+    {
+        // Parent logic
+        int wstatus;
+        int BUF_SIZE = 2048;
+        char buf[BUF_SIZE];
+
+        // Read from the pipe and write it to the output file
+        if (waitpid(pid, &wstatus, 0) == -1)
+        {
+            perror("wait");
+            status = false;
+        }
+        else
+        {
+            if (WIFEXITED(wstatus))
+            {
+                if (WEXITSTATUS(wstatus) == 1)
+                {
+                    status = false;
+                }
+                else
+                {
+                    ssize_t num_read = read(pipefd[0], buf, BUF_SIZE);
+                    if (num_read == -1)
+                    {
+                        perror("read");
+                        exit(EXIT_FAILURE);
+                    }
+                    printf("num_bytes: %ld\n", num_read);
+
+                    ssize_t num_write = write(fd, buf, num_read);
+                    if (num_write != num_read)
+                    {
+                        perror("write");
+                        exit(EXIT_FAILURE);
+                    }
+                }
+            }
+            else
+            {
+                status = false;
+            }
+        }
+    }
+
+    return status;
 }
