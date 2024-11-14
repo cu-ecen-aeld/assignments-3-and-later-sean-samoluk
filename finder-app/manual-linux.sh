@@ -12,6 +12,7 @@ BUSYBOX_VERSION=1_33_1
 FINDER_APP_DIR=$(realpath $(dirname $0))
 ARCH=arm64
 CROSS_COMPILE=aarch64-none-linux-gnu-
+SYSROOT=$(aarch64-none-linux-gnu-gcc -print-sysroot)
 
 if [ $# -lt 1 ]
 then
@@ -103,11 +104,10 @@ echo "Library dependencies"
 #       -> libresolv.so.2
 #       -> libc.so.6
 #       -> Copy to /lib64
-SYSROOT=/opt/cross/arm-gnu-toolchain-13.3.rel1-x86_64-aarch64-none-linux-gnu/aarch64-none-linux-gnu
-cp ${SYSROOT}/libc/lib/ld-linux-aarch64.so.1 ${ROOT_FS}/lib/ld-linux-aarch64.so.1
-cp ${SYSROOT}/libc/lib64/libm.so.6 ${ROOT_FS}/lib64/libm.so.6
-cp ${SYSROOT}/libc/lib64/libresolv.so.2 ${ROOT_FS}/lib64/libresolv.so.2
-cp ${SYSROOT}/libc/lib64/libc.so.6 ${ROOT_FS}/lib64/libc.so.6
+cp ${SYSROOT}/lib/ld-linux-aarch64.so.1 ${ROOT_FS}/lib/ld-linux-aarch64.so.1
+cp ${SYSROOT}/lib64/libm.so.6 ${ROOT_FS}/lib64/libm.so.6
+cp ${SYSROOT}/lib64/libresolv.so.2 ${ROOT_FS}/lib64/libresolv.so.2
+cp ${SYSROOT}/lib64/libc.so.6 ${ROOT_FS}/lib64/libc.so.6
 
 # TODO: Make device nodes
 # - Null device
