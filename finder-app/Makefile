@@ -2,6 +2,8 @@ TARGET = writer
 
 CC = gcc
 
+all: $(TARGET)
+
 
 $(TARGET): $(TARGET).o
 	$(CROSS_COMPILE)$(CC) -o $(TARGET) $(TARGET).o
