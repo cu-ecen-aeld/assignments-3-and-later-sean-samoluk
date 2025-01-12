@@ -8,12 +8,13 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <bsd/sys/queue.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <syslog.h>
 #include <time.h>
 #include <unistd.h>
+
+#include "bsd/sys/queue.h"
 
 #define CHUNK_SIZE 1024
 #define LISTEN_BACKLOG 10
