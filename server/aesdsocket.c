@@ -14,7 +14,7 @@
 #include <time.h>
 #include <unistd.h>
 
-#include "bsd/sys/queue.h"
+#include "/usr/include/bsd/sys/queue.h"
 
 #define CHUNK_SIZE 1024
 #define LISTEN_BACKLOG 10
