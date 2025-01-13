@@ -7,7 +7,7 @@ LDFLAGS ?= -lpthread -lrt
 all: $(TARGET)
 
 $(TARGET): $(TARGET).o
-	$(CC) -o $(TARGET) $(TARGET).o $(CFLAGS) 
+	$(CC) -o $(TARGET) $(TARGET).o $(CFLAGS) $(LDFLAGS)
 
 $(TARGET).o: $(TARGET).c
 	$(CC) -c $(TARGET).c -o $(TARGET).o $(CFLAGS)
