@@ -243,11 +243,19 @@ int handle_packets(int sockfd)
         if (new_fd == -1)
         {
             // Print error and break so we can clean up 
-            perror("accept");
             if (shutdown_sig)
             {
                 break;
             }
+            else if(errno == EINTR)
+            {
+                continue;
+            }
+            else
+            {
+                perror("accept");
+            }
+
         }
         else
         {
