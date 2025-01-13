@@ -158,7 +158,10 @@ void* handle_connection(void* arg)
             if (buf[0] == '\n')
             {
                 pthread_mutex_lock(&write_mutex);
-                write(fd, line_buf, line_index);
+                if (write(fd, line_buf, line_index) == -1)
+                {
+                    handle_error("write");
+                }
                 pthread_mutex_unlock(&write_mutex);
 
                 if (send_file(conn_info->recv_fd, AESD_DATA) == -1)
@@ -207,7 +210,10 @@ void write_timestamp(int sig, siginfo_t *si, void *uc)
 
     syslog(LOG_INFO, "%s", time_str);
     pthread_mutex_lock(&write_mutex);
-    write(fd, time_str, num_bytes);
+    if (write(fd, time_str, num_bytes) == -1)
+    {
+        handle_error("write");
+    }
     pthread_mutex_unlock(&write_mutex);
 
     close(fd);
