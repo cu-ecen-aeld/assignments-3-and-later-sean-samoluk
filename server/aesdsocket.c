@@ -18,7 +18,12 @@
 
 #define CHUNK_SIZE 1024
 #define LISTEN_BACKLOG 10
+
+#ifdef USE_AESD_CHAR_DEVICE
+#define AESD_DATA "/dev/aesdchar"
+#else
 #define AESD_DATA "/var/tmp/aesdsocketdata"
+#endif
 #define AESD_SOCKET "9000"
 
 #define handle_error_en(en, msg) \
@@ -105,7 +110,17 @@ void* handle_connection(void* arg)
     struct connection_info* conn_info = (struct connection_info*)arg;
 
     // Receives data over the connection and appends to /var/tmp/aesdsocketdata
+#ifdef USE_AESD_CHAR_DEVICE
+    int fd = open(AESD_DATA, O_RDWR);
+#else
     int fd = open(AESD_DATA, O_WRONLY | O_CREAT | O_APPEND, 0644);
+#endif
+    if (fd == -1)
+    {
+        handle_error("open");
+    }
+
+
     char buf[2];
     memset(buf, 0, sizeof buf);
     int line_index = 0;
@@ -160,6 +175,7 @@ void* handle_connection(void* arg)
                 pthread_mutex_lock(&write_mutex);
                 if (write(fd, line_buf, line_index) == -1)
                 {
+                    printf("write fd: %d", fd);
                     handle_error("write");
                 }
                 pthread_mutex_unlock(&write_mutex);
@@ -423,11 +439,11 @@ int main(int argc, char **argv)
     }
 
     // Setup signal handler for the timestamp
+#ifndef USE_AESD_CHAR_DEVICE
     struct sigaction sa_timer;
     struct sigevent sev_timer;
     struct itimerspec its;
     timer_t timer_id;
-    //sigset_t mask;
 
     sa_timer.sa_flags = SA_SIGINFO;
     sa_timer.sa_sigaction = write_timestamp;
@@ -457,6 +473,7 @@ int main(int argc, char **argv)
     {
         handle_error("timer_settime");
     }
+#endif
 
     struct addrinfo hints, *res;
 
@@ -494,11 +511,13 @@ int main(int argc, char **argv)
     close(sockfd);
 
     // Delete the socket data
+#ifndef USE_AESD_CHAR_DEVICE
     syslog(LOG_INFO, "Deleting file: %s", AESD_DATA);
     if (remove(AESD_DATA) == -1)
     {
         handle_error("remove");
     }
+#endif
 
     closelog();
 
