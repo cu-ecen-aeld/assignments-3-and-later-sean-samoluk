@@ -18,6 +18,7 @@
 #include <linux/types.h>
 #include <linux/fs.h> // file_operations
 #include "aesdchar.h"
+#include "aesd_ioctl.h"
 
 int aesd_major =   0; // use dynamic major
 int aesd_minor =   0;
@@ -31,6 +32,8 @@ int aesd_open(struct inode *inode, struct file *filp);
 int aesd_release(struct inode *inode, struct file *filp);
 ssize_t aesd_read(struct file *filp, char __user *buf, size_t count, loff_t *f_pos);
 ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count, loff_t *f_pos);
+loff_t aesd_seek(struct file *filp, loff_t offset, int whence);
+long aesd_ioctl(struct file *file, unsigned int cmd, unsigned long arg);
 static int aesd_setup_cdev(struct aesd_dev *dev);
 int aesd_init_module(void);
 void aesd_cleanup_module(void);
@@ -104,19 +107,23 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
     size_t read_size = 0;
     if (be)
     {
-        printk(KERN_DEBUG "output: %s", be->buffptr);
+        //printk(KERN_DEBUG "output: %s", be->buffptr);
+        printk(KERN_DEBUG "f_pos: %llu", *f_pos);
+        printk(KERN_DEBUG "offset_rtn: %lu", offset_rtn);
 
         // Return the number of bytes read for the entry
-        if (count > be->size)
-        {
-            read_size = be->size;
-        }
-        else
+        read_size = be->size - offset_rtn;
+        if (count < read_size)
         {
             read_size = count;
         }
 
-        if (copy_to_user(buf, be->buffptr, read_size) == 0)
+        if (read_size == 0)
+        {
+            return 0;
+        }
+
+        if (copy_to_user(buf, be->buffptr + offset_rtn, read_size) == 0)
         {
             retval = (ssize_t)read_size;
             *f_pos += read_size;
@@ -237,16 +244,143 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
         tmp_entry->size = 0;
     }
 
+    *f_pos += retval;
+
     mutex_unlock(&dev->lock);
 
     return retval;
 }
+
+loff_t aesd_seek(struct file *filp, loff_t offset, int whence)
+{
+    struct aesd_dev *dev = filp->private_data;
+
+    int ret = mutex_lock_interruptible(&dev->lock);
+    if (ret)
+    {
+        printk(KERN_WARNING "Failed to aquire lock");
+        return ret;
+    }
+
+    printk(KERN_DEBUG "cb size: %lu", dev->circular_buf.size);
+
+    loff_t off = fixed_size_llseek(filp, offset, whence, dev->circular_buf.size);
+
+    mutex_unlock(&dev->lock);
+
+    printk(KERN_DEBUG "off: %llu", off);
+
+    return off;
+}
+
+/**
+ * Adjust the file offset (f_pos) parameter of @param filp based on the location specififed by
+ * @param write_cmd (the zero referenced command to locate) and @param write_cmd_offset (the
+ * zero referenced offset into the command)
+ * @return 0 if successful, negative if error occurred:
+ *      -ERESTARTSYS if mutex could not be obtained
+ *      -EINVAL if write_cmd or write_cmd_offset was out of range
+ */
+static long aesd_adjust_file_offset(struct file *filp,
+                                    unsigned int write_cmd,
+                                    unsigned int write_cmd_offset)
+{
+    struct aesd_dev *dev = filp->private_data;
+    struct aesd_circular_buffer *cb = &dev->circular_buf;
+
+    // Check write_cmd is within range
+    if (write_cmd < 0 || write_cmd > AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED)
+    {
+        printk(KERN_ERR "write_cmd not within range 0 to %d",
+               AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED);
+
+        return -EINVAL;
+    }
+
+    uint8_t index = cb->out_offs;
+    uint8_t start_offset = 0;
+
+    int ret = mutex_lock_interruptible(&dev->lock);
+    if (ret)
+    {
+        printk(KERN_WARNING "Failed to aquire lock");
+        return ret;
+    }
+
+    printk(KERN_DEBUG "index: %d", index);
+
+    while (index != write_cmd)
+    {
+        // Check that the write command has been previously added
+        if (cb->entry[index].size > 0)
+        {
+            start_offset += cb->entry[index].size;
+
+            index++;
+            index %= AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;
+        }
+        else
+        {
+            printk(KERN_ERR "write_cmd has not yet been written");
+
+            return -EINVAL;
+        }
+
+        printk(KERN_DEBUG "start_offset: %d", start_offset);
+    }
+
+    // Check write_cmd_offset is within range
+    if (write_cmd_offset > cb->entry[index].size)
+    {
+        printk(KERN_ERR "write_cmd_offset greater than write_cmd length %lu",
+               cb->entry[index].size);
+
+        return -EINVAL;
+    }
+
+    filp->f_pos = start_offset + write_cmd_offset;
+
+    printk(KERN_DEBUG "filp->f_pos: %llu", filp->f_pos);
+
+    mutex_unlock(&dev->lock);
+
+    return 0;
+}
+
+long aesd_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
+{
+    long retval = 0;
+
+    switch (cmd)
+    {
+        case AESDCHAR_IOCSEEKTO:
+        {
+            struct aesd_seekto seekto;
+            if (copy_from_user(&seekto, (const void __user *)arg, sizeof(seekto)) != 0)
+            {
+                retval = EFAULT;
+            }
+            else
+            {
+                retval = aesd_adjust_file_offset(filp,
+                                                 seekto.write_cmd,
+                                                 seekto.write_cmd_offset);
+            }
+
+            break;
+        }
+    }
+    return retval;
+}
+
 struct file_operations aesd_fops = {
     .owner =    THIS_MODULE,
     .read =     aesd_read,
     .write =    aesd_write,
     .open =     aesd_open,
     .release =  aesd_release,
+    .llseek = aesd_seek,
+    .unlocked_ioctl = aesd_ioctl,
 };
 
 static int aesd_setup_cdev(struct aesd_dev *dev)

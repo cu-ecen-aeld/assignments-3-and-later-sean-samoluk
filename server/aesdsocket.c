@@ -20,6 +20,7 @@
 #define LISTEN_BACKLOG 10
 
 #ifdef USE_AESD_CHAR_DEVICE
+#include "../aesd-char-driver/aesd_ioctl.h"
 #define AESD_DATA "/dev/aesdchar"
 #else
 #define AESD_DATA "/var/tmp/aesdsocketdata"
@@ -63,37 +64,25 @@ void signal_handler(int sig)
     }
 }
 
-int send_file(int socket_fd, const char *filename)
+int send_file(int fd_socket, int fd_file)
 {
-    FILE *file = fopen(filename, "r");
-    
-    if (file == NULL)
-    {
-        handle_error("fopen");
-    }
-    
     char buffer[CHUNK_SIZE];
-    size_t bytesRead;
+    size_t bytes_read;
     
     // Read from the file and send to the socket in chunks
-    while ((bytesRead = fread(buffer, sizeof(char), CHUNK_SIZE, file)) > 0)
+    while ((bytes_read = read(fd_file, buffer, CHUNK_SIZE)) > 0)
     {
-        if (send(socket_fd, buffer, bytesRead, 0) == -1)
+        if (send(fd_socket, buffer, bytes_read, 0) == -1)
         {
-            fclose(file);
+            close(fd_socket);
+            close(fd_file);
             handle_error("send");
         }
     }
-    
-    if (ferror(file))
-    {
-        handle_error("fread");
-    }
-    
-    fclose(file);
 
     return 0;
 }
+
 
 // get sockaddr, IPv4 or IPv6:
 void* get_in_addr(struct sockaddr *sa)
@@ -119,7 +108,6 @@ void* handle_connection(void* arg)
     {
         handle_error("open");
     }
-
 
     char buf[2];
     memset(buf, 0, sizeof buf);
@@ -173,18 +161,85 @@ void* handle_connection(void* arg)
             if (buf[0] == '\n')
             {
                 pthread_mutex_lock(&write_mutex);
+
+#ifdef USE_AESD_CHAR_DEVICE
+                // Check if this is an ioctl command (AESDCHAR_IOCSEEKTO:X,Y)
+                char *substr = strstr(line_buf, "AESDCHAR_IOCSEEKTO");
+                if (substr)
+                {
+                    struct aesd_seekto seekto;
+
+                    // Need to tokenize the string and pull out the offsets
+                    char seek_delim[] = ":";
+                    char *seek_data = 0;
+
+                    seek_data = strtok(line_buf, seek_delim);
+
+                    // Get the offsets
+                    seek_data = strtok(NULL, seek_delim);
+
+                    // Now split the offsets
+                    char offset_delim[] = ",";
+                    char *offsets = 0;
+
+                    // Get the write command
+                    offsets = strtok(seek_data, offset_delim);
+                    seekto.write_cmd = strtol(offsets, NULL, 10);
+
+                    // Get the write command offset
+                    offsets = strtok(NULL, offset_delim);
+                    seekto.write_cmd_offset = strtol(offsets, NULL, 10);
+
+                    // Update the file descriptor
+                    int result_ret = ioctl(fd, AESDCHAR_IOCSEEKTO, &seekto);
+                    if (result_ret == -1)
+                    {
+                        syslog(LOG_ERR, "ioctl failed");
+                        handle_error("ioctl");
+                    }
+
+                    // Read from the updated offset and send the data to the socket
+                    if (send_file(conn_info->recv_fd, fd) == -1)
+                    {
+                        syslog(LOG_ERR, "Failed to send file.");
+                        handle_error("send_file");
+                    }
+                }
+                else
+                {
+                    // Just write to the driver
+                    if (write(fd, line_buf, line_index) == -1)
+                    {
+                        printf("write fd: %d", fd);
+                        close(fd);
+                        handle_error("write");
+                    }
+
+                    int fd_read = open(AESD_DATA, O_RDONLY);
+                    if (send_file(conn_info->recv_fd, fd_read) == -1)
+                    {
+                        syslog(LOG_ERR, "Failed to send file.");
+                        handle_error("send_file");
+                    }
+
+                    close(fd_read);
+                }
+#else
                 if (write(fd, line_buf, line_index) == -1)
                 {
                     printf("write fd: %d", fd);
+                    close(fd);
                     handle_error("write");
                 }
-                pthread_mutex_unlock(&write_mutex);
 
-                if (send_file(conn_info->recv_fd, AESD_DATA) == -1)
+                if (send_file(conn_info->recv_fd, fd) == -1)
                 {
                     syslog(LOG_ERR, "Failed to send file.");
+                    close(fd);
                     handle_error("send_file");
                 }
+#endif
+                pthread_mutex_unlock(&write_mutex);
 
                 line_index = 0;
             }
@@ -271,7 +326,6 @@ int handle_packets(int sockfd)
             {
                 perror("accept");
             }
-
         }
         else
         {
